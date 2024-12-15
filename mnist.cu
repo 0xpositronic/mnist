@@ -4,12 +4,42 @@
 #include <stdint.h>
 #include <stdio.h>
 
+void matmul(float *A, float *B, float *C, int n) { // only for square matrices
+  for (int i = 0; i < n; i++) {
+    for (int j = 0; j < n; j++) {
+      for (int k = 0; k < n; k++) {
+        C[k * n + i] += B[j * n + i] * A[k * n + j];
+      }
+    }
+  }
+}
+void matmul_tester() {
+  float A[4] = {1, 2, 3, 4};
+  float B[4] = {-4, -3, -2, -1};
+  float C[4] = {0, 0, 0, 0};
+  int n = 2;
+  matmul(A, B, C, n);
+  for (int i = 0; i < n; i++) {
+    for (int j = 0; j < n; j++) {
+      printf("%.2f ", C[i * n + j]);
+    }
+    printf("\n");
+  }
+  if (C[0] == -8.0 && C[1] == -5.0 && C[2] == -20.0 && C[3] == -13.0)
+    printf("CPU matmul correct\n");
+  else
+    printf("!ERROR IN CPU MATMUL!\n");
+  printf("=========");
+}
+
 void lilfbig(uint32_t *big) {
   *big = (*big >> 24) | (*big << 24) | ((*big & 0x0000FF00) << 8) |
          ((*big & 0x00FF0000) >> 8);
 }
 
 int main() {
+  matmul_tester();
+
   FILE *train_images = fopen(DATA_DIR "train-images-idx3-ubyte", "rb");
   FILE *train_labels = fopen(DATA_DIR "train-labels-idx1-ubyte", "rb");
   FILE *test_images = fopen(DATA_DIR "t10k-images-idx3-ubyte", "rb");
@@ -47,7 +77,7 @@ int main() {
     total_size *= sizes[i];
     printf("%d\n", sizes[i]);
   }
-  printf("%lu\n", total_size);
+  printf("total data size: %lu\n", total_size);
 
   uint8_t *train_data = (uint8_t *)malloc(sizeof(uint8_t) * total_size);
   for (int i = 0; i < total_size; i++) {
@@ -55,9 +85,9 @@ int main() {
     // lilfbig(train_data);
   }
 
-  for (int i = 0; i < 28; i++) {
-    printf("%d\n", train_data[0 + 12 * sizes[1] + i]);
-  }
+  // for (int i = 0; i < 28; i++) {
+  //   printf("%d\n", train_data[0 + 12 * sizes[1] + i]);
+  // }
 
   uint8_t sample[sizes[1] * sizes[2]];
   memcpy(sample, train_data, sizes[1] * sizes[2] * sizeof(uint8_t));
