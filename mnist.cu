@@ -1,3 +1,4 @@
+#include "config.h"
 #include "mybmp.h"
 #include <cuda_runtime.h>
 #include <stdint.h>
@@ -7,8 +8,6 @@ void lilfbig(uint32_t *big) {
   *big = (*big >> 24) | (*big << 24) | ((*big & 0x0000FF00) << 8) |
          ((*big & 0x00FF0000) >> 8);
 }
-
-#define DATA_DIR "/home/positronic/Documents/dl/cuda/mnist/data/"
 
 int main() {
   FILE *train_images = fopen(DATA_DIR "train-images-idx3-ubyte", "rb");
