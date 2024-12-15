@@ -4,6 +4,15 @@
 #include <stdint.h>
 #include <stdio.h>
 
+void print_mat(float *A, int *sizes) {
+  for (int i = 0; i < sizes[0]; i++) {
+    for (int j = 0; j < sizes[1]; j++) {
+      printf("%.2f ", A[i * sizes[1] + j]);
+    }
+    printf("\n");
+  }
+}
+
 void matmul(float *A, float *B, float *C, int n) { // only for square matrices
   for (int i = 0; i < n; i++) {
     for (int j = 0; j < n; j++) {
@@ -19,17 +28,39 @@ void matmul_tester() {
   float C[4] = {0, 0, 0, 0};
   int n = 2;
   matmul(A, B, C, n);
-  for (int i = 0; i < n; i++) {
-    for (int j = 0; j < n; j++) {
-      printf("%.2f ", C[i * n + j]);
-    }
-    printf("\n");
-  }
+  int sizes[2] = {2, 2};
+  print_mat(C, sizes);
   if (C[0] == -8.0 && C[1] == -5.0 && C[2] == -20.0 && C[3] == -13.0)
     printf("CPU matmul correct\n");
   else
     printf("!ERROR IN CPU MATMUL!\n");
-  printf("=========");
+}
+
+float *init_weights(int in_size, int out_size) {
+  float *weights = (float *)malloc(sizeof(float) * in_size * out_size);
+  for (int i = 0; i < in_size * out_size; i++) {
+    weights[i] = 0;
+  }
+  return weights;
+}
+
+float *transpose(float *A, int *sizes) {
+  float *At = (float *)malloc(sizeof(float) * sizes[0] * sizes[1]);
+  for (int i = 0; i < sizes[0]; i++) {
+    for (int j = 0; j < sizes[1]; j++) {
+      At[j * sizes[0] + i] = A[i * sizes[1] + j];
+    }
+  }
+  return At;
+}
+void transpose_tester() {
+  float A[6] = {1, 2, 3, 4, 5, 6};
+  int sizes[2] = {2, 3};
+  float *At = transpose(A, sizes);
+  int sizest[2] = {sizes[1], sizes[0]};
+  print_mat(A, sizes);
+  printf("===\n");
+  print_mat(At, sizest);
 }
 
 void lilfbig(uint32_t *big) {
@@ -39,6 +70,7 @@ void lilfbig(uint32_t *big) {
 
 int main() {
   matmul_tester();
+  transpose_tester();
 
   FILE *train_images = fopen(DATA_DIR "train-images-idx3-ubyte", "rb");
   FILE *train_labels = fopen(DATA_DIR "train-labels-idx1-ubyte", "rb");
@@ -82,7 +114,6 @@ int main() {
   uint8_t *train_data = (uint8_t *)malloc(sizeof(uint8_t) * total_size);
   for (int i = 0; i < total_size; i++) {
     fread(&train_data[i], sizeof(uint8_t), 1, train_images);
-    // lilfbig(train_data);
   }
 
   // for (int i = 0; i < 28; i++) {
@@ -93,5 +124,14 @@ int main() {
   memcpy(sample, train_data, sizes[1] * sizes[2] * sizeof(uint8_t));
   draw((uint8_t)28, (uint8_t)28, (uint8_t)1, sample);
 
+  uint8_t data[sizes[1] * sizes[2]];
+  memcpy(data, train_data, sizes[1] * sizes[2] * sizeof(uint8_t));
+  int image_size[2] = {(int)sizes[1], (int)sizes[2]};
+
+  float *dataf = (float *)malloc(sizeof(float) * 28 * 28);
+  for (int i = 0; i < (28 * 28); i++) {
+    dataf[i] = ((float)data[i] / 127.5f) - 1.0f;
+  }
+  print_mat(transpose(dataf, image_size), image_size);
   return 0;
 }
