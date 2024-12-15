@@ -13,11 +13,11 @@ void print_mat(float *A, int *sizes) {
   }
 }
 
-void matmul(float *A, float *B, float *C, int n) { // only for square matrices
-  for (int i = 0; i < n; i++) {
-    for (int j = 0; j < n; j++) {
-      for (int k = 0; k < n; k++) {
-        C[k * n + i] += B[j * n + i] * A[k * n + j];
+void matmul(float *A, float *B, float *C, int *sizes) {
+  for (int i = 0; i < sizes[3]; i++) {
+    for (int j = 0; j < sizes[2]; j++) {
+      for (int k = 0; k < sizes[0]; k++) {
+        C[k * sizes[1] + i] += B[j * sizes[3] + i] * A[k * sizes[1] + j];
       }
     }
   }
@@ -26,9 +26,8 @@ void matmul_tester() {
   float A[4] = {1, 2, 3, 4};
   float B[4] = {-4, -3, -2, -1};
   float C[4] = {0, 0, 0, 0};
-  int n = 2;
-  matmul(A, B, C, n);
-  int sizes[2] = {2, 2};
+  int sizes[4] = {2, 2, 2, 2};
+  matmul(A, B, C, sizes);
   print_mat(C, sizes);
   if (C[0] == -8.0 && C[1] == -5.0 && C[2] == -20.0 && C[3] == -13.0)
     printf("CPU matmul correct\n");
@@ -39,7 +38,7 @@ void matmul_tester() {
 float *init_weights(int in_size, int out_size) {
   float *weights = (float *)malloc(sizeof(float) * in_size * out_size);
   for (int i = 0; i < in_size * out_size; i++) {
-    weights[i] = 0;
+    weights[i] = i;
   }
   return weights;
 }
@@ -116,10 +115,6 @@ int main() {
     fread(&train_data[i], sizeof(uint8_t), 1, train_images);
   }
 
-  // for (int i = 0; i < 28; i++) {
-  //   printf("%d\n", train_data[0 + 12 * sizes[1] + i]);
-  // }
-
   uint8_t sample[sizes[1] * sizes[2]];
   memcpy(sample, train_data, sizes[1] * sizes[2] * sizeof(uint8_t));
   draw((uint8_t)28, (uint8_t)28, (uint8_t)1, sample);
@@ -128,10 +123,23 @@ int main() {
   memcpy(data, train_data, sizes[1] * sizes[2] * sizeof(uint8_t));
   int image_size[2] = {(int)sizes[1], (int)sizes[2]};
 
-  float *dataf = (float *)malloc(sizeof(float) * 28 * 28);
-  for (int i = 0; i < (28 * 28); i++) {
-    dataf[i] = ((float)data[i] / 127.5f) - 1.0f;
+  float *dataf = (float *)malloc(sizeof(float) * total_size);
+  for (int i = 0; i < total_size; i++) {
+    dataf[i] = ((float)train_data[i] / 127.5f) - 1.0f;
   }
-  print_mat(transpose(dataf, image_size), image_size);
+  // print_mat(transpose(dataf, image_size), image_size);
+
+  float *weights = init_weights(28 * 28, 1000);
+
+  int finalsize[2] = {28 * 28, (int)sizes[0]};
+  float *datafT = transpose(dataf, finalsize);
+  float *out = (float *)malloc(1000 * sizes[0] * sizeof(float));
+
+  for (int i = 0; i < 1000 * sizes[0]; i++) {
+    out[i] = 0.0;
+  }
+  int sizes1[4] = {28 * 28, 1000, finalsize[1], finalsize[0]};
+  matmul(weights, datafT, out, sizes1);
+
   return 0;
 }
