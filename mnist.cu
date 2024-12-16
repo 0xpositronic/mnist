@@ -1,8 +1,10 @@
 #include "config.h"
 #include "mybmp.h"
 #include <cuda_runtime.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <time.h>
 
 void print_mat(float *A, int *sizes) {
   for (int i = 0; i < sizes[0]; i++) {
@@ -13,63 +15,25 @@ void print_mat(float *A, int *sizes) {
   }
 }
 
-void matmul(float *A, float *B, float *C, int *sizes) {
+void matmul(float *A, float *B, float *C, int *sizes) { // less slow
   for (int i = 0; i < sizes[3]; i++) {
-    for (int j = 0; j < sizes[2]; j++) {
-      for (int k = 0; k < sizes[0]; k++) {
-        C[k * sizes[3] + i] += B[j * sizes[3] + i] * A[k * sizes[1] + j];
+    for (int j = 0; j < sizes[0]; j++) {
+      float sum = 0;
+      for (int k = 0; k < sizes[2]; k++) {
+        sum += A[j * sizes[1] + k] * B[k * sizes[3] + i];
       }
+      C[j * sizes[3] + i] = sum;
     }
   }
 }
-
-void mmatmul(float *A, float *B, float *C, int *sizes) {
-  // sizes[0] = rows of A
-  // sizes[1] = cols of A
-  // sizes[2] = cols of B
-  // sizes[3] = cols of output
-
-  // Initialize C to zero first
-  int output_size = sizes[0] * sizes[3];
-  for (int i = 0; i < output_size; i++) {
-    C[i] = 0.0f;
-  }
-
-  // Matrix multiplication with bounds check
-  for (int i = 0; i < sizes[0]; i++) {
-    for (int j = 0; j < sizes[3]; j++) {
-      float sum = 0.0f;
-      for (int k = 0; k < sizes[1]; k++) {
-        sum += A[i * sizes[1] + k] * B[k * sizes[3] + j];
-      }
-      C[i * sizes[3] + j] = sum;
-    }
-  }
-}
-
 void matmul_tester() {
   float A[6] = {1, 2, 3, 4, 5, 6};
-  float B[6] = {-6, -5, -4, -3, -2, -1};
-  float C[4] = {0, 0, 0, 0};
-  int sizes[4] = {2, 3, 3, 2};
+  float B[3] = {-6, -5, -4};
+  float C[2] = {0, 0};
+  int sizes[4] = {2, 3, 3, 1};
   int out_sizes[2] = {sizes[0], sizes[3]};
   matmul(A, B, C, sizes);
   print_mat(C, out_sizes);
-}
-
-float *zeros(int size) {
-  float *A = (float *)malloc(sizeof(float) * size);
-  for (int i = 0; i < size; i++) {
-    A[i] = 0;
-  }
-  return A;
-}
-float *fill(int size) {
-  float *A = (float *)malloc(sizeof(float) * size);
-  for (int i = 0; i < size; i++) {
-    A[i] = i;
-  }
-  return A;
 }
 
 float *transpose(float *A, int *sizes) {
@@ -90,7 +54,45 @@ void transpose_tester() {
   print_mat(At, sizest);
 }
 
-void lilfbig(uint32_t *big) {
+float *relu(float *A, int size) {
+  float *Ar = (float *)malloc(sizeof(float) * size);
+  for (int i = 0; i < size; i++) {
+    if (A[i] < 0) {
+      Ar[i] = 0;
+    } else
+      Ar[i] = A[i];
+  }
+  return Ar;
+}
+
+float *softmax(float *A, int size) {
+  float *As = (float *)malloc(sizeof(float) * size);
+  float sum = 0.0;
+  for (int i = 0; i < size; i++) {
+    sum += exp(A[i]);
+  }
+  for (int i = 0; i < size; i++) {
+    As[i] = exp(A[i]) / sum;
+  }
+  return As;
+}
+
+float *zeros(int size) {
+  float *A = (float *)malloc(sizeof(float) * size);
+  for (int i = 0; i < size; i++) {
+    A[i] = 0;
+  }
+  return A;
+}
+float *fill(int size) {
+  float *A = (float *)malloc(sizeof(float) * size);
+  for (int i = 0; i < size; i++) {
+    A[i] = i;
+  }
+  return A;
+}
+
+void lilfbig(uint32_t *big) { // big-endian to little-endian
   *big = (*big >> 24) | (*big << 24) | ((*big & 0x0000FF00) << 8) |
          ((*big & 0x00FF0000) >> 8);
 }
@@ -103,65 +105,11 @@ void save_matrix(float *data, int rows, int cols, const char *filename) {
   fclose(f);
 }
 
-#include <float.h>
-#include <math.h>
-
-void debug_numerical_issues(float *out, float *weights, float *data,
-                            int num_samples) {
-  // Check weights
-  for (int i = 0; i < 28 * 28 * 1000; i++) {
-    if (isnan(weights[i]) || isinf(weights[i])) {
-      fprintf(stderr, "Invalid weight at index %d: %f\n", i, weights[i]);
-      return;
-    }
-  }
-
-  // Check input data
-  for (int i = 0; i < num_samples * 28 * 28; i++) {
-    if (isnan(data[i]) || isinf(data[i])) {
-      fprintf(stderr, "Invalid input at index %d: %f\n", i, data[i]);
-      return;
-    }
-  }
-
-  // Check output and get statistics
-  float max_val = -FLT_MAX;
-  float min_val = FLT_MAX;
-  int nan_count = 0;
-  int inf_count = 0;
-  int large_val_count = 0;
-
-  for (int i = 0; i < num_samples * 1000; i++) {
-    if (isnan(out[i])) {
-      nan_count++;
-      continue;
-    }
-    if (isinf(out[i])) {
-      inf_count++;
-      continue;
-    }
-    if (fabs(out[i]) > 1e6) {
-      large_val_count++;
-    }
-    max_val = fmax(max_val, out[i]);
-    min_val = fmin(min_val, out[i]);
-  }
-
-  fprintf(stderr, "Output statistics:\n");
-  fprintf(stderr, "NaN count: %d\n", nan_count);
-  fprintf(stderr, "Inf count: %d\n", inf_count);
-  fprintf(stderr, "Large value count: %d\n", large_val_count);
-  fprintf(stderr, "Max value: %f\n", max_val);
-  fprintf(stderr, "Min value: %f\n", min_val);
-}
-
-#include <time.h>
 float *xavier_init(int fan_in, int fan_out) {
   float *weights = (float *)malloc(sizeof(float) * fan_in * fan_out);
   float scale = sqrtf(2.0f / (fan_in + fan_out));
 
-  // Use time as seed
-  srand(time(NULL));
+  srand(1);
 
   for (int i = 0; i < fan_in * fan_out; i++) {
     // Generate random number between -1 and 1
@@ -169,6 +117,19 @@ float *xavier_init(int fan_in, int fan_out) {
     weights[i] = rand_val * scale;
   }
   return weights;
+}
+
+float *forward(float *weights1, float *weights2, float *weights3, float *out1,
+               float *out2, float *out3, int *layer_sizes1, int *layer_sizes2,
+               int *layer_sizes3, int *data_size, float *train_data_T) {
+  float *h1, *h2, *h3;
+  matmul(weights1, train_data_T, out1, layer_sizes1);
+  h1 = relu(out1, 128 * data_size[0]);
+  matmul(weights2, h1, out2, layer_sizes2);
+  h2 = relu(out2, 64 * data_size[0]);
+  matmul(weights3, h2, out3, layer_sizes3);
+  h3 = softmax(out3, 10 * data_size[0]);
+  return h3;
 }
 
 int main() {
@@ -223,27 +184,29 @@ int main() {
     train_data[i] = ((float)pixel / 127.5f) - 1.0f;
   }
 
-  // float *weights = fill(28 * 28 * 1000);
-  // float *weights = xavier_init(28 * 28, 1000); // Instead of fill()
-  float *weights =
-      xavier_init(1000, 28 * 28); // num_output_features x num_input_features
-  save_matrix(weights, 1000, 28 * 28, "c_weights.bin");
-  float *out = zeros(train_size[0] * 1000);
+  float *weights1 = xavier_init(128, 28 * 28);
+  float *weights2 = xavier_init(64, 128);
+  float *weights3 = xavier_init(10, 64);
+
+  float *out1 = zeros(train_size[0] * 128);
+  float *out2 = zeros(train_size[0] * 64);
+  float *out3 = zeros(train_size[0] * 10);
 
   int data_size[2] = {train_size[0], train_size[1] * train_size[2]};
   float *train_data_T = transpose(train_data, data_size);
 
-  int layer_sizes[4] = {1000, 28 * 28, data_size[1], data_size[0]};
-  matmul(weights, train_data_T, out, layer_sizes);
+  int layer_sizes1[4] = {128, 28 * 28, data_size[1], data_size[0]};
+  int layer_sizes2[4] = {64, 128, 128, data_size[0]};
+  int layer_sizes3[4] = {10, 64, 64, data_size[0]};
 
-  debug_numerical_issues(out, weights, train_data, train_size[0]);
-
-  save_matrix(train_data, train_size[0], train_size[1] * train_size[2],
-              "c_train_data.bin");
-  // save_matrix(weights, 28 * 28, 1000, "c_weights.bin");
-  save_matrix(train_data_T, train_size[1] * train_size[2], train_size[0],
-              "c_train_data_T.bin");
-  save_matrix(out, 1000, train_size[0], "c_output.bin");
-
+  for (int iter = 0; iter < 10; iter++) {
+    float *output =
+        forward(weights1, weights2, weights3, out1, out2, out3, layer_sizes1,
+                layer_sizes2, layer_sizes3, data_size, train_data_T);
+    // calculate loss. loss()
+    // update weights. backward()
+  }
+  // calculate final loss and accuracy
+  // save weights
   return 0;
 }
