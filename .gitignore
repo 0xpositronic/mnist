@@ -3,3 +3,5 @@ build/
 .venv/
 .clangd
 config.h
+*.bin
+*.py
