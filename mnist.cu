@@ -119,8 +119,8 @@ float *layer_forward(Layer *layer, float *input, int input_size) {
   switch (layer->type) {
   case DENSE: {
     layer->H = (float *)malloc(
-        sizeof(float) * layer->ins *
-        layer->outs); // no need to init to 0 since we use mid sum
+        sizeof(float) * layer->outs *
+        input_size); // no need to init to 0 since we use mid sum
 
     int sizes[4] = {layer->outs, layer->ins, layer->ins, input_size};
     matmul(layer->W, input, layer->H, sizes);
@@ -172,6 +172,9 @@ void add_layer(Network *net, Layer layer) {
 float *forward(Network *net, float *input, int input_size) {
   float *current_input = input;
   for (int i = 0; i < net->num_layers; i++) {
+    printf("Layer %d forward pass (type=%d, ins=%d, outs=%d, input_size=%d)\n",
+           i, net->layers[i].type, net->layers[i].ins, net->layers[i].outs,
+           input_size);
     current_input = layer_forward(&net->layers[i], current_input, input_size);
   }
   return current_input;
@@ -239,8 +242,9 @@ int main() {
   add_layer(&net, create_softmax());
 
   int iters = 10;
+  float *h;
   for (int i = 0; i < iters; i++) {
-    input = forward(&net, input, data_size[0]);
+    h = forward(&net, input, data_size[0]);
     // loss = calc_loss(input, labels);
     // net = backward(&net, ...);
   }
