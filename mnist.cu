@@ -1,10 +1,21 @@
 #include "config.h"
-#include "mybmp.h"
 #include <cuda_runtime.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <time.h>
+
+typedef struct {
+  int ins;
+  int outs;
+  float *W;
+  float *H;
+} Layer;
+
+typedef struct {
+  Layer *layers;
+  int num_layers;
+} Network;
 
 void print_mat(float *A, int *sizes) {
   for (int i = 0; i < sizes[0]; i++) {
