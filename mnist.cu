@@ -196,6 +196,8 @@ float *forward(Network *net, float *input, int input_size) {
 }
 
 float *layer_backward(Layer *layer, float *dH_above, int *size_above) {
+  if (layer->dH != NULL)
+    free(layer->dH);
   if (layer->dW != NULL)
     free(layer->dW);
 
@@ -204,12 +206,31 @@ float *layer_backward(Layer *layer, float *dH_above, int *size_above) {
     break;
   }
   case RELU: {
+    layer->dH = (float *)malloc(sizeof(float) * size_above[0] * size_above[1]);
+    for (int i = 0; i < size_above[0] * size_above[1]; i++) {
+        layer->dH[i] = layer->H[i] > 0 ? dH_above[i] : 0;
+    }
     break;
   }
   case SOFTMAX: {
-    for (int i = 0; i < size_above[1]; i++) {
-      for (int j = 0; j < size_above[0]; j++) {
-        layer->dH[j * size_above[1] + i] = -1 * (-);
+    layer->dH = (float *)malloc(sizeof(float) * size_above[0] * size_above[1]);
+    // 10x60000 -> 10x60000
+    for (int sample = 0; sample < size_above[1]; sample++) {
+      for (int i = 0; i < size_above[0]; i++) { // loop over input's 10 classes
+        float sum = 0.0f;
+        for (int j = 0; j < size_above[0]; j++) { // loop over output's 10 classes
+          float yi = layer->H[i * size_above[1] + sample];
+          float yj = layer->H[j * size_above[1] + sample];
+          float grad_j = dH_above[j * size_above[1] + sample];
+
+          if (i == j) { // when we're dealing with calculating how the output for the j th class gets effected by change in that class in the input
+            sum += grad_j * yi * (1.0 -yi);
+          }
+          else {
+            sum += grad_j * (-yi * yj);
+          }
+        }
+        layer->dH[i * size_above[1] + sample] = sum;
       }
     }
     break;
@@ -232,9 +253,10 @@ void backward(Network *net, float loss, int *sizes, int *y) {
       }
     }
   }
+  int size_above[2] = {sizes[0], sizes[1]};
   for (int i = net->num_layers; i > 0; i--) {
-    int size_above[2] = {1, 1};
     layer_backward(&net->layers[i - 1], grad, size_above);
+    size_above[0] = net->layers[i - 1].ins;
   }
 }
 
@@ -270,8 +292,8 @@ float calc_loss(float *h, int *y, int *sizes) {
 int main() {
   FILE *train_images = fopen(DATA_DIR "train-images-idx3-ubyte", "rb");
   FILE *train_labels = fopen(DATA_DIR "train-labels-idx1-ubyte", "rb");
-  FILE *test_images = fopen(DATA_DIR "t10k-images-idx3-ubyte", "rb");
-  FILE *test_labels = fopen(DATA_DIR "t10k-labels-idx3-ubyte", "rb");
+  // FILE *test_images = fopen(DATA_DIR "t10k-images-idx3-ubyte", "rb");
+  // FILE *test_labels = fopen(DATA_DIR "t10k-labels-idx3-ubyte", "rb");
 
   // read first 32 bits / 4 bytes
   uint32_t magic_number;
@@ -343,7 +365,7 @@ int main() {
     float *h = forward(&net, input, data_size[0]);
     float loss = calc_loss(h, train_classes, out_size);
     printf("iter=%d -- loss=%.4f", i, loss);
-    backward(&net, loss, out_size);
+    backward(&net, loss, out_size, train_classes);
   }
 
   free_network(&net);
