@@ -10,6 +10,7 @@ typedef struct {
   LayerType type;
   int ins;
   int outs;
+  float *X;
   float *W;
   float *H;
   float *dW;
@@ -83,6 +84,7 @@ Layer create_dense(int ins, int outs) {
   layer.type = DENSE;
   layer.ins = ins;
   layer.outs = outs;
+  layer.X = NULL;
   layer.W = xavier_init(outs, ins);
   layer.H = NULL; // cant know the batch size here
   layer.dW = NULL;
@@ -94,6 +96,7 @@ Layer create_relu(int size) {
   layer.type = RELU;
   layer.ins = size;
   layer.outs = size;
+  layer.X = NULL;
   layer.W = NULL;
   layer.H = NULL;
   layer.dW = NULL;
@@ -105,6 +108,7 @@ Layer create_softmax(int size) {
   layer.type = SOFTMAX;
   layer.ins = size;
   layer.outs = size;
+  layer.X = NULL;
   layer.W = NULL;
   layer.H = NULL;
   layer.dW = NULL;
@@ -117,6 +121,12 @@ void free_layer(Layer *layer) {
     free(layer->W);
   if (layer->H != NULL)
     free(layer->H);
+  if (layer->X != NULL)
+    free(layer->X);
+  if (layer->dW != NULL)
+    free(layer->dW);
+  if (layer->dH != NULL)
+    free(layer->dH);
 }
 
 float *layer_forward(Layer *layer, float *input, int input_size) {
@@ -126,9 +136,11 @@ float *layer_forward(Layer *layer, float *input, int input_size) {
 
   switch (layer->type) {
   case DENSE: {
-    layer->H = (float *)malloc(
-        sizeof(float) * layer->outs *
-        input_size); // no need to init to 0 since we use mid sum
+    if (layer->X != NULL)
+      free(layer->X); 
+    layer->H = (float *)malloc( sizeof(float) * layer->outs * input_size); // no need to init to 0 since we use mid sum
+    layer->X = (float *)malloc(sizeof(float) * layer->ins * input_size);
+    memcpy(layer->X, input, sizeof(float) * layer->ins * input_size);
 
     int sizes[4] = {layer->outs, layer->ins, layer->ins, input_size};
     matmul(layer->W, input, layer->H, sizes);
@@ -203,6 +215,20 @@ float *layer_backward(Layer *layer, float *dH_above, int *size_above) {
 
   switch (layer->type) {
   case DENSE: {
+    layer->dH = (float *)malloc(sizeof(float) * layer->ins * size_above[1]);
+    layer->dW = (float *)malloc(sizeof(float) * layer->outs * layer->ins);
+
+    int X_sizes[2] = {layer->ins, size_above[1]};
+    float *X_T = transpose(layer->X, X_sizes);
+    int sizes[4] = {size_above[0], size_above[1], X_sizes[1], X_sizes[0]};
+    matmul(dH_above, X_T, layer->dW, sizes);
+
+    int W_sizes[2] = {layer->outs, layer->ins};
+    float *W_T = transpose(layer->W, W_sizes);
+    int sizes_dH[4] = {layer->ins, layer->outs, layer->outs, size_above[1]};
+    matmul(W_T, dH_above, layer->dH, sizes_dH);
+
+    free(W_T); free(X_T);
     break;
   }
   case RELU: {
@@ -241,30 +267,34 @@ float *layer_backward(Layer *layer, float *dH_above, int *size_above) {
 
 void backward(Network *net, float loss, int *sizes, int *y) {
   float *previous_output = net->layers[net->num_layers - 1].H;
-  float *grad = (float *)malloc(sizeof(float) * sizes[0] * sizes[1]);
+  float *current_grad = (float *)malloc(sizeof(float) * sizes[0] * sizes[1]);
 
   for (int i = 0; i < sizes[1]; i++) {
     for (int j = 0; j < sizes[0]; j++) {
       if (j == y[i]) {
-        grad[j * sizes[1] + i] =
-            (-1.0f / previous_output[j * sizes[1] + i]) / sizes[1];
+        current_grad[j * sizes[1] + i] =
+            (-1.0f / previous_output[j * sizes[1] + i]);
       } else {
-        grad[j * sizes[1] + i] = 0.0f;
+        current_grad[j * sizes[1] + i] = 0.0f;
       }
     }
   }
+  
   int size_above[2] = {sizes[0], sizes[1]};
   for (int i = net->num_layers; i > 0; i--) {
-    layer_backward(&net->layers[i - 1], grad, size_above);
-    size_above[0] = net->layers[i - 1].ins;
+    float *next_grad = layer_backward(&net->layers[i - 1], current_grad, size_above);
+      free(current_grad);  // Free previous gradient
+      current_grad = next_grad;
+      size_above[0] = net->layers[i - 1].ins;
   }
+  free(current_grad);
 }
 
 int *get_prediction(float *h, int *sizes) {
   int *predictions = (int *)malloc(sizeof(int) * sizes[0] * sizes[1]);
   for (int i = 0; i < sizes[1]; i++) {
     float pred = 0;
-    int max;
+    int max = 0;
     for (int j = 0; j < sizes[0]; j++) {
       if (h[j * sizes[1] + i] > pred) {
         pred = h[j * sizes[1] + i];
@@ -287,6 +317,17 @@ float calc_loss(float *h, int *y, int *sizes) {
   }
   loss /= sizes[1];
   return loss;
+}
+
+void update_weights(Network *net, float lr) {
+  for (int i = 0; i < net->num_layers; i++) {
+    Layer layer = net->layers[i];
+    if (layer.type == DENSE) {
+      for (int j = 0; j < layer.outs * layer.ins; j++) {
+        layer.W[j] -= lr * layer.dW[j];
+      }
+    }
+  }
 }
 
 int main() {
@@ -348,8 +389,7 @@ int main() {
   fclose(train_labels);
 
   int train_size[2] = {data_size[0], data_size[1] * data_size[2]};
-  float *input;
-  input = transpose(train_data, train_size);
+  float *input = transpose(train_data, train_size);
 
   Network net = create_network();
   add_layer(&net, create_dense(train_size[1], 128));
@@ -360,12 +400,14 @@ int main() {
   add_layer(&net, create_softmax(10));
 
   int out_size[2] = {10, train_size[0]};
-  int iters = 2;
+  int iters = 6;
+  float lr = 0.01;
   for (int i = 0; i < iters; i++) {
     float *h = forward(&net, input, data_size[0]);
     float loss = calc_loss(h, train_classes, out_size);
-    printf("iter=%d -- loss=%.4f", i, loss);
+    printf("iter=%d -- loss=%.4f\n", i, loss);
     backward(&net, loss, out_size, train_classes);
+    update_weights(&net, lr);
   }
 
   free_network(&net);
