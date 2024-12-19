@@ -1,11 +1,11 @@
 Mnist classifier in C/CUDA
 
-current stage: C implementation
-- matmul and dense layer implemented and tested
-- full forward pass implemented, not tested
+current stage: C implementation %95 done
 
 todo:
-backprop
+cleanup and evaluation on test set
+memory management in backward()
+maybe make it faster
 test against numpy/pytorch
 visualizations
 CUDA implementation and testing
