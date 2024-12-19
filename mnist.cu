@@ -67,9 +67,9 @@ float *transpose(float *A, int *sizes) {
 
 float *xavier_init(int ins, int outs) {
   float *weights = (float *)malloc(sizeof(float) * ins * outs);
-  float scale = sqrtf(2.0f / (ins + outs));
+  float scale = sqrtf(6.0f / (ins + outs));
 
-  srand(1);
+  srand(time(NULL));
 
   for (int i = 0; i < ins * outs; i++) {
     // Generate random number between -1 and 1
@@ -117,27 +117,31 @@ Layer create_softmax(int size) {
 }
 
 void free_layer(Layer *layer) {
-  if (layer->W != NULL)
-    free(layer->W);
-  if (layer->H != NULL)
-    free(layer->H);
-  if (layer->X != NULL)
-    free(layer->X);
-  if (layer->dW != NULL)
-    free(layer->dW);
-  if (layer->dH != NULL)
-    free(layer->dH);
+  //if (layer->W != NULL)
+    //free(layer->W);
+  //if (layer->H != NULL)
+    //free(layer->H);
+  //if (layer->X != NULL)
+    //free(layer->X);
+  //if (layer->dW != NULL)
+    //free(layer->dW);
+  //if (layer->dH != NULL)
+    //free(layer->dH);
 }
 
 float *layer_forward(Layer *layer, float *input, int input_size) {
-  if (layer->H != NULL)
-    free(layer->H); // free previous output since we will create a new one, we
-                    // would lose the previous.
+  if (layer->H != NULL) {
+    free(layer->H);
+    layer->H = NULL;
+  }
 
   switch (layer->type) {
   case DENSE: {
-    if (layer->X != NULL)
-      free(layer->X); 
+    if (layer->X != NULL) {
+      free(layer->X);
+      layer->X = NULL;
+    }
+      
     layer->H = (float *)malloc( sizeof(float) * layer->outs * input_size); // no need to init to 0 since we use mid sum
     layer->X = (float *)malloc(sizeof(float) * layer->ins * input_size);
     memcpy(layer->X, input, sizeof(float) * layer->ins * input_size);
@@ -155,25 +159,36 @@ float *layer_forward(Layer *layer, float *input, int input_size) {
   }
   case SOFTMAX: {
     layer->H = (float *)malloc(sizeof(float) * input_size * layer->ins);
-    for (int i = 0; i < input_size; i++) { // for each sample
+  
+    for (int i = 0; i < input_size; i++) {
       // Find max for numerical stability
-      float max_val = input[0 * input_size + i];
-      for (int j = 1; j < layer->ins; j++) {
+      float max_val = -INFINITY;
+      for (int j = 0; j < layer->ins; j++) {
         if (input[j * input_size + i] > max_val) {
           max_val = input[j * input_size + i];
         }
       }
 
-      // Compute sum of exp(x - max_val)
+      // Sum of exp(x - max_val)
       float sum = 0.0f;
       for (int j = 0; j < layer->ins; j++) {
-        sum += exp(input[j * input_size + i] - max_val);
+        float val = expf(input[j * input_size + i] - max_val);
+        layer->H[j * input_size + i] = val;  // Store intermediate value
+        sum += val;
       }
 
-      // Compute softmax
-      for (int j = 0; j < layer->ins; j++) {
-        layer->H[j * input_size + i] =
-            exp(input[j * input_size + i] - max_val) / sum;
+      // Normalize to get probabilities
+      if (sum > 0) {  // Add check for zero sum
+        for (int j = 0; j < layer->ins; j++) {
+          layer->H[j * input_size + i] /= sum;
+          // Clamp to avoid exact 0 or 1
+          layer->H[j * input_size + i] = fmaxf(fminf(layer->H[j * input_size + i], 0.9999f), 0.0001f);
+          }
+      } else {
+        // If sum is 0, output uniform distribution
+        for (int j = 0; j < layer->ins; j++) {
+            layer->H[j * input_size + i] = 1.0f / layer->ins;
+        }
       }
     }
     break;
@@ -189,10 +204,10 @@ Network create_network() {
   return net;
 }
 void free_network(Network *net) {
-  for (int i = 0; i < net->num_layers; i++) {
-    free_layer(&net->layers[i]);
-  }
-  free(net->layers);
+  //for (int i = 0; i < net->num_layers; i++) {
+    //free_layer(&net->layers[i]);
+  //}
+  //free(net->layers);
 }
 void add_layer(Network *net, Layer layer) {
   net->num_layers++;
@@ -208,10 +223,14 @@ float *forward(Network *net, float *input, int input_size) {
 }
 
 float *layer_backward(Layer *layer, float *dH_above, int *size_above) {
-  if (layer->dH != NULL)
+  if (layer->dH != NULL) {
     free(layer->dH);
-  if (layer->dW != NULL)
+    layer->dH = NULL;
+  }
+  if (layer->dW != NULL) {
     free(layer->dW);
+    layer->dW = NULL;
+  }
 
   switch (layer->type) {
   case DENSE: {
@@ -266,28 +285,24 @@ float *layer_backward(Layer *layer, float *dH_above, int *size_above) {
 }
 
 void backward(Network *net, float loss, int *sizes, int *y) {
-  float *previous_output = net->layers[net->num_layers - 1].H;
-  float *current_grad = (float *)malloc(sizeof(float) * sizes[0] * sizes[1]);
+    float *previous_output = net->layers[net->num_layers - 1].H;
+    float *current_grad = (float *)malloc(sizeof(float) * sizes[0] * sizes[1]);
 
-  for (int i = 0; i < sizes[1]; i++) {
-    for (int j = 0; j < sizes[0]; j++) {
-      if (j == y[i]) {
-        current_grad[j * sizes[1] + i] =
-            (-1.0f / previous_output[j * sizes[1] + i]);
-      } else {
-        current_grad[j * sizes[1] + i] = 0.0f;
-      }
+    // Initialize gradients for cross-entropy loss with softmax
+    for (int i = 0; i < sizes[1]; i++) {
+        for (int j = 0; j < sizes[0]; j++) {
+            // Softmax derivative with cross-entropy loss simplifies to (y_pred - y_true)
+            float y_pred = previous_output[j * sizes[1] + i];
+            float y_true = (j == y[i]) ? 1.0f : 0.0f;
+            current_grad[j * sizes[1] + i] = (y_pred - y_true) / sizes[1];  // Divide by batch size
+        }
     }
-  }
-  
-  int size_above[2] = {sizes[0], sizes[1]};
-  for (int i = net->num_layers; i > 0; i--) {
-    float *next_grad = layer_backward(&net->layers[i - 1], current_grad, size_above);
-      free(current_grad);  // Free previous gradient
-      current_grad = next_grad;
-      size_above[0] = net->layers[i - 1].ins;
-  }
-  free(current_grad);
+
+    int size_above[2] = {sizes[0], sizes[1]};
+    for (int i = net->num_layers; i > 0; i--) {
+        current_grad = layer_backward(&net->layers[i - 1], current_grad, size_above);
+        size_above[0] = net->layers[i - 1].ins;
+    }
 }
 
 int *get_prediction(float *h, int *sizes) {
@@ -318,7 +333,34 @@ float calc_loss(float *h, int *y, int *sizes) {
   loss /= sizes[1];
   return loss;
 }
+// Add debug prints to calc_loss to understand what's happening
+float ccalc_loss(float *h, int *y, int *sizes) {
+    float loss = 0.0f;
+    const float epsilon = 1e-7f;
+    
+    // Add debug prints for first few examples
+    printf("\nDebug first 3 examples:\n");
+    for (int i = 0; i < 3; i++) {
+        printf("Example %d (true class: %d):\n", i, y[i]);
+        for (int j = 0; j < sizes[0]; j++) {
+            printf("class %d: %.4f  ", j, h[j * sizes[1] + i]);
+        }
+        printf("\n");
+    }
 
+    for (int i = 0; i < sizes[1]; i++) {
+        float true_class_prob = h[y[i] * sizes[1] + i];
+        true_class_prob = fmaxf(true_class_prob, epsilon);
+        float log_prob = logf(true_class_prob);
+        if (i < 3) {  // Debug print for first few examples
+            printf("Example %d: true_class_prob = %.4f, log_prob = %.4f\n", 
+                   i, true_class_prob, log_prob);
+        }
+        loss -= log_prob;
+    }
+    loss /= sizes[1];
+    return loss;
+}
 void update_weights(Network *net, float lr) {
   for (int i = 0; i < net->num_layers; i++) {
     Layer layer = net->layers[i];
@@ -368,13 +410,15 @@ int main() {
     data_size[i] = (int)size;
     printf("%d\n", size);
   }
+  total_size /= 60;
+  data_size[0] /= 60;
   printf("total data size: %lu\n", total_size);
 
   float *train_data = (float *)malloc(sizeof(float) * total_size);
   uint8_t pixel;
   for (int i = 0; i < total_size; i++) {
     fread(&pixel, sizeof(uint8_t), 1, train_images);
-    train_data[i] = ((float)pixel / 127.5f) - 1.0f;
+    train_data[i] = (float)pixel / 255.0f;
   }
   fclose(train_images);
 
@@ -392,7 +436,9 @@ int main() {
   float *input = transpose(train_data, train_size);
 
   Network net = create_network();
-  add_layer(&net, create_dense(train_size[1], 128));
+  add_layer(&net, create_dense(train_size[1], 256));  // Increased from 128
+  add_layer(&net, create_relu(256));
+  add_layer(&net, create_dense(256, 128));  // Added middle layer
   add_layer(&net, create_relu(128));
   add_layer(&net, create_dense(128, 64));
   add_layer(&net, create_relu(64));
@@ -400,16 +446,19 @@ int main() {
   add_layer(&net, create_softmax(10));
 
   int out_size[2] = {10, train_size[0]};
-  int iters = 6;
-  float lr = 0.01;
+  int iters = 100;
+  float lr = 1;  // Reduced learning rate from 0.1
+  
+  // Add learning rate decay
+  
   for (int i = 0; i < iters; i++) {
     float *h = forward(&net, input, data_size[0]);
     float loss = calc_loss(h, train_classes, out_size);
     printf("iter=%d -- loss=%.4f\n", i, loss);
-    backward(&net, loss, out_size, train_classes);
+    backward(&net, loss, out_size, train_classes);    
     update_weights(&net, lr);
   }
 
-  free_network(&net);
+  //free_network(&net);
   return 0;
 }
