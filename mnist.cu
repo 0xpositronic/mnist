@@ -12,8 +12,10 @@ typedef struct {
   int outs;
   float *X;
   float *W;
+  float *B;
   float *H;
   float *dW;
+  float *dB;
   float *dH;
 } Layer;
 typedef struct {
@@ -22,15 +24,27 @@ typedef struct {
 } Network;
 
 void lilfbig(uint32_t *big) { // big-endian to little-endian
-  *big = (*big >> 24) | (*big << 24) | ((*big & 0x0000FF00) << 8) |
-         ((*big & 0x00FF0000) >> 8);
+  /*
+  big endian: first byte of the 4 byte magic number is on the right
+  | 0x03 | 0x08 | 00000000 | *00000000* |
+  50855936 = 11000010000000000000000000
+  
+  Little endian
+  Address  0	 1	 2	 3
+  Data	  00	00	08	03
+
+  Big endian
+  Address	 0   1	 2	 3
+  Data	  03	08	00	00
+  */
+  *big = (*big >> 24) | (*big << 24) | ((*big & 0x0000FF00) << 8) | ((*big & 0x00FF0000) >> 8);
 }
 
-void save_matrix(float *data, int rows, int cols, const char *filename) {
-  FILE *f = fopen(filename, "wb");
-  fwrite(&rows, sizeof(int), 1, f);
-  fwrite(&cols, sizeof(int), 1, f);
-  fwrite(data, sizeof(float), rows * cols, f);
+void save_mat(float *data, int *sizes, const char *name) {
+  FILE *f = fopen(name, "wb");
+  fwrite(&sizes[0], sizeof(int), 1, f);
+  fwrite(&sizes[1], sizeof(int), 1, f);
+  fwrite(data, sizeof(float), sizes[0] * sizes[1], f);
   fclose(f);
 }
 
@@ -43,7 +57,7 @@ void print_mat(float *A, int *sizes) {
   }
 }
 
-void matmul(float *A, float *B, float *C, int *sizes) { // less slow
+void matmul(float *A, float *B, float *C, int *sizes) {
   for (int i = 0; i < sizes[3]; i++) {
     for (int j = 0; j < sizes[0]; j++) {
       float sum = 0;
@@ -53,6 +67,25 @@ void matmul(float *A, float *B, float *C, int *sizes) { // less slow
       C[j * sizes[3] + i] = sum;
     }
   }
+}
+
+void broadcast_sum(float *A, float *B, float *C, int *sizes) {
+  for (int i = 0; i < sizes[0]; i++) {
+    for (int j = 0; j < sizes[1]; j++) {
+      C[i * sizes[1] + j] = A[i * sizes[1] + j] + B[i];
+    }
+  }
+}
+float *collapse_sum(float *A, int *sizes){
+  float *out = (float *)malloc(sizeof(float) * sizes[0]);
+  for (int i = 0; i < sizes[0]; i++) {
+    float sum = 0.0f;
+    for (int j = 0; j < sizes[1]; j++) {
+      sum += A[i * sizes[1] + j];
+    }
+    out[i] = sum;
+  }
+  return out;
 }
 
 float *transpose(float *A, int *sizes) {
@@ -65,15 +98,21 @@ float *transpose(float *A, int *sizes) {
   return At;
 }
 
-float *xavier_init(int ins, int outs) {
-  float *weights = (float *)malloc(sizeof(float) * ins * outs);
-  float scale = sqrtf(6.0f / (ins + outs));
+float *zeros(int size) {  
+  float *A = (float *)malloc(sizeof(float) * size);
+  for(int i = 0; i < size; i++){
+    A[i] = 0.0f;
+  }
+  return A;
+}
 
+float *he_init(int ins, int outs) {
+  float *weights = (float *)malloc(sizeof(float) * ins * outs);
+  float scale = sqrt(12.00f / (ins + outs)); // 4/ins+outs/var_prev
   srand(time(NULL));
 
   for (int i = 0; i < ins * outs; i++) {
-    // Generate random number between -1 and 1
-    float rand_val = ((float)rand() / RAND_MAX) * 2 - 1;
+    float rand_val = ((float)rand() / RAND_MAX) * 2 - 1; // random(-1, 1) var=1/3
     weights[i] = rand_val * scale;
   }
   return weights;
@@ -85,9 +124,11 @@ Layer create_dense(int ins, int outs) {
   layer.ins = ins;
   layer.outs = outs;
   layer.X = NULL;
-  layer.W = xavier_init(outs, ins);
-  layer.H = NULL; // cant know the batch size here
+  layer.W = he_init(outs, ins);
+  layer.B = zeros(outs);
+  layer.H = NULL;
   layer.dW = NULL;
+  layer.dB = NULL;
   layer.dH = NULL;
   return layer;
 }
@@ -98,8 +139,10 @@ Layer create_relu(int size) {
   layer.outs = size;
   layer.X = NULL;
   layer.W = NULL;
+  layer.B = NULL;
   layer.H = NULL;
   layer.dW = NULL;
+  layer.dB = NULL;
   layer.dH = NULL;
   return layer;
 }
@@ -110,23 +153,12 @@ Layer create_softmax(int size) {
   layer.outs = size;
   layer.X = NULL;
   layer.W = NULL;
+  layer.B = NULL;
   layer.H = NULL;
   layer.dW = NULL;
+  layer.dB = NULL;
   layer.dH = NULL;
   return layer;
-}
-
-void free_layer(Layer *layer) {
-  //if (layer->W != NULL)
-    //free(layer->W);
-  //if (layer->H != NULL)
-    //free(layer->H);
-  //if (layer->X != NULL)
-    //free(layer->X);
-  //if (layer->dW != NULL)
-    //free(layer->dW);
-  //if (layer->dH != NULL)
-    //free(layer->dH);
 }
 
 float *layer_forward(Layer *layer, float *input, int input_size) {
@@ -142,12 +174,14 @@ float *layer_forward(Layer *layer, float *input, int input_size) {
       layer->X = NULL;
     }
       
-    layer->H = (float *)malloc( sizeof(float) * layer->outs * input_size); // no need to init to 0 since we use mid sum
+    layer->H = (float *)malloc( sizeof(float) * layer->outs * input_size);
     layer->X = (float *)malloc(sizeof(float) * layer->ins * input_size);
     memcpy(layer->X, input, sizeof(float) * layer->ins * input_size);
 
     int sizes[4] = {layer->outs, layer->ins, layer->ins, input_size};
+    int sizes_bias[2] = {layer->outs, input_size};
     matmul(layer->W, input, layer->H, sizes);
+    broadcast_sum(layer->H, layer->B, layer->H, sizes_bias);
     break;
   }
   case RELU: {
@@ -203,12 +237,7 @@ Network create_network() {
   net.num_layers = 0;
   return net;
 }
-void free_network(Network *net) {
-  //for (int i = 0; i < net->num_layers; i++) {
-    //free_layer(&net->layers[i]);
-  //}
-  //free(net->layers);
-}
+
 void add_layer(Network *net, Layer layer) {
   net->num_layers++;
   net->layers = (Layer *)realloc(net->layers, sizeof(Layer) * net->num_layers);
@@ -231,11 +260,16 @@ float *layer_backward(Layer *layer, float *dH_above, int *size_above) {
     free(layer->dW);
     layer->dW = NULL;
   }
+  if (layer->dB != NULL) {
+    free(layer->dB);
+    layer->dB = NULL;
+  }
 
   switch (layer->type) {
   case DENSE: {
     layer->dH = (float *)malloc(sizeof(float) * layer->ins * size_above[1]);
     layer->dW = (float *)malloc(sizeof(float) * layer->outs * layer->ins);
+    layer->dB = (float *)malloc(sizeof(float) * layer->outs);
 
     int X_sizes[2] = {layer->ins, size_above[1]};
     float *X_T = transpose(layer->X, X_sizes);
@@ -246,6 +280,8 @@ float *layer_backward(Layer *layer, float *dH_above, int *size_above) {
     float *W_T = transpose(layer->W, W_sizes);
     int sizes_dH[4] = {layer->ins, layer->outs, layer->outs, size_above[1]};
     matmul(W_T, dH_above, layer->dH, sizes_dH);
+
+    layer->dB = collapse_sum(dH_above, size_above);
 
     free(W_T); free(X_T);
     break;
@@ -259,7 +295,6 @@ float *layer_backward(Layer *layer, float *dH_above, int *size_above) {
   }
   case SOFTMAX: {
     layer->dH = (float *)malloc(sizeof(float) * size_above[0] * size_above[1]);
-    // 10x60000 -> 10x60000
     for (int sample = 0; sample < size_above[1]; sample++) {
       for (int i = 0; i < size_above[0]; i++) { // loop over input's 10 classes
         float sum = 0.0f;
@@ -333,40 +368,16 @@ float calc_loss(float *h, int *y, int *sizes) {
   loss /= sizes[1];
   return loss;
 }
-// Add debug prints to calc_loss to understand what's happening
-float ccalc_loss(float *h, int *y, int *sizes) {
-    float loss = 0.0f;
-    const float epsilon = 1e-7f;
-    
-    // Add debug prints for first few examples
-    printf("\nDebug first 3 examples:\n");
-    for (int i = 0; i < 3; i++) {
-        printf("Example %d (true class: %d):\n", i, y[i]);
-        for (int j = 0; j < sizes[0]; j++) {
-            printf("class %d: %.4f  ", j, h[j * sizes[1] + i]);
-        }
-        printf("\n");
-    }
 
-    for (int i = 0; i < sizes[1]; i++) {
-        float true_class_prob = h[y[i] * sizes[1] + i];
-        true_class_prob = fmaxf(true_class_prob, epsilon);
-        float log_prob = logf(true_class_prob);
-        if (i < 3) {  // Debug print for first few examples
-            printf("Example %d: true_class_prob = %.4f, log_prob = %.4f\n", 
-                   i, true_class_prob, log_prob);
-        }
-        loss -= log_prob;
-    }
-    loss /= sizes[1];
-    return loss;
-}
 void update_weights(Network *net, float lr) {
   for (int i = 0; i < net->num_layers; i++) {
     Layer layer = net->layers[i];
     if (layer.type == DENSE) {
-      for (int j = 0; j < layer.outs * layer.ins; j++) {
-        layer.W[j] -= lr * layer.dW[j];
+      for (int j = 0; j < layer.outs; j++) {
+        layer.B[j] -= lr * layer.dB[j];
+        for (int k = 0; k < layer.ins; k++) {
+          layer.W[j * layer.ins + k] -= lr * layer.dW[j * layer.ins + k];
+        }
       }
     }
   }
@@ -378,27 +389,10 @@ int main() {
   // FILE *test_images = fopen(DATA_DIR "t10k-images-idx3-ubyte", "rb");
   // FILE *test_labels = fopen(DATA_DIR "t10k-labels-idx3-ubyte", "rb");
 
-  // read first 32 bits / 4 bytes
-  uint32_t magic_number;
+  uint32_t magic_number; // read the first 32 bits/4 bytes
   fread(&magic_number, sizeof(uint32_t), 1, train_images);
-  // big endian: first byte of the 4 byte magic number is on the right
-  // | 0x03 | 0x08 | 00000000 | *00000000* |
-  // printf("magic number: %d\n", magic_number);
-  // 50855936 = 11000010000000000000000000
-  /*
-  Little endian
-  Address	0	1	2	3
-  Data	00	00	08	03
-
-  Big endian
-  Address	0	1	2	3
-  Data	03	08	00	00
-  */
-  // get the 3rd and 4th bytes. 0xFF is 11111111, a full byte.
-  uint8_t data_type = (magic_number >> 16) & 0xFF;
-  uint8_t dimension = (magic_number >> 24) & 0xFF;
-  printf("data type: %d\n", data_type);
-  printf("dimensions: %d\n", dimension);
+  uint8_t data_type = (magic_number >> 16) & 0xFF; // 3rd byte
+  uint8_t dimension = (magic_number >> 24) & 0xFF; // 4th byte
 
   int data_size[dimension];
   uint32_t size;
@@ -408,37 +402,37 @@ int main() {
     lilfbig(&size);
     total_size *= size;
     data_size[i] = (int)size;
-    printf("%d\n", size);
+    printf("dim_%d = %d\n", i, size);
   }
-  total_size /= 60;
-  data_size[0] /= 60;
-  printf("total data size: %lu\n", total_size);
+  int split = 60;
+  total_size /= split;
+  data_size[0] /= split;
+  printf("data size (1/%d): %lu\n",split, total_size);
 
   float *train_data = (float *)malloc(sizeof(float) * total_size);
   uint8_t pixel;
   for (int i = 0; i < total_size; i++) {
     fread(&pixel, sizeof(uint8_t), 1, train_images);
-    train_data[i] = (float)pixel / 255.0f;
+    train_data[i] = (float)pixel / 255.0f; // normalize to 0-1
   }
   fclose(train_images);
 
   fseek(train_labels, 8, SEEK_SET);
-  int *train_classes = (int *)malloc(sizeof(int) * 60000);
+  int *train_classes = (int *)malloc(sizeof(int) * data_size[0]);
   uint8_t label;
-  int la = 0;
-  for (int i = 0; i < 60000; i++) {
+  for (int i = 0; i < data_size[0]; i++) {
     fread(&label, 1, 1, train_labels);
     train_classes[i] = (int)label;
   }
   fclose(train_labels);
 
   int train_size[2] = {data_size[0], data_size[1] * data_size[2]};
-  float *input = transpose(train_data, train_size);
+  float *input = transpose(train_data, train_size); // to column-major
 
   Network net = create_network();
-  add_layer(&net, create_dense(train_size[1], 256));  // Increased from 128
+  add_layer(&net, create_dense(train_size[1], 256));
   add_layer(&net, create_relu(256));
-  add_layer(&net, create_dense(256, 128));  // Added middle layer
+  add_layer(&net, create_dense(256, 128));
   add_layer(&net, create_relu(128));
   add_layer(&net, create_dense(128, 64));
   add_layer(&net, create_relu(64));
@@ -447,9 +441,7 @@ int main() {
 
   int out_size[2] = {10, train_size[0]};
   int iters = 100;
-  float lr = 1;  // Reduced learning rate from 0.1
-  
-  // Add learning rate decay
+  float lr = 1;
   
   for (int i = 0; i < iters; i++) {
     float *h = forward(&net, input, data_size[0]);
@@ -459,6 +451,5 @@ int main() {
     update_weights(&net, lr);
   }
 
-  //free_network(&net);
   return 0;
 }
