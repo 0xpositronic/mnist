@@ -1,12 +1,10 @@
 Mnist classifier in C/CUDA
 
-current stage: C implementation %95 done
+current stage: testing C implementation
 
 todo:
-forgot the bias lol
 cleanup and evaluation on test set
-memory management in backward()
-maybe make it faster
 test against numpy/pytorch
-visualizations
-CUDA implementation and testing
+make it faster without changing data types
+extract matricies to visualize with python
+cuda
