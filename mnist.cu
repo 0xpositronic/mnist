@@ -300,52 +300,75 @@ float *get_prediction(float *h, int batch_size, int n_classes) {
 }
 
 
-int main() {
-  size_t e;
-  FILE *train_data = fopen(DATA_DIR "train-images-idx3-ubyte", "rb");
-  FILE *train_labels = fopen(DATA_DIR "train-labels-idx1-ubyte", "rb");
+float* read_mnist_images(const char* filename, int* n_images, int* image_size, int scale) {
+  FILE *data = fopen(filename, "rb");
+  if (!data) {
+    printf("Error opening file: %s\n", filename);
+    return NULL;
+  }
 
-  uint32_t magic_number; // read the first 32 bits/4 bytes
-  e = fread(&magic_number, sizeof(uint32_t), 1, train_data);
-  //uint8_t data_type = (magic_number >> 16) & 0xFF; // 3rd byte
-  uint8_t n_dimensions = (magic_number >> 24) & 0xFF; // 4th byte
+  uint32_t magic_number;
+  size_t e = fread(&magic_number, sizeof(uint32_t), 1, data);
+  uint8_t n_dimensions = (magic_number >> 24) & 0xFF;
   
   int data_size[n_dimensions];
   uint32_t size;
   size_t total_size = 1;
   for (int i = 0; i < n_dimensions; i++) {
-    e = fread(&size, sizeof(uint32_t), 1, train_data);
+    e = fread(&size, sizeof(uint32_t), 1, data);
     lilfbig(&size);
     total_size *= size;
     data_size[i] = (int)size;
-    printf("dim_%d = %d\n", i, size);
   }
 
-  int scale = 6;
-  total_size /= scale;
-  data_size[0] /= scale;
-  printf("data size (1/%d): %lu\n",scale, total_size);
+  if (scale > 1) {
+    total_size /= scale;
+    data_size[0] /= scale;
+  }
 
   float *batch_data = (float *)malloc(sizeof(float) * total_size);
   uint8_t pixel;
   for (int i = 0; i < total_size; i++) {
-    e = fread(&pixel, sizeof(uint8_t), 1, train_data);
-    batch_data[i] = (float)pixel / 255.0f; // to 0-1
+    e = fread(&pixel, sizeof(uint8_t), 1, data);
+    batch_data[i] = (float)pixel / 255.0f;
   }
-  fclose(train_data);
-  int image_size = data_size[1] * data_size[2];
+  fclose(data);
+
+  *n_images = data_size[0];
+  *image_size = data_size[1] * data_size[2];
   
-  fseek(train_labels, 8, SEEK_SET);
-  float *batch_labels = (float *)malloc(sizeof(float) * data_size[0]);
+  if(e != 1) printf("file read error\n");
+  return batch_data;
+}
+
+float* read_mnist_labels(const char* filename, int n_images) {
+  FILE *labels = fopen(filename, "rb");
+  if (!labels) {
+    printf("Error opening file: %s\n", filename);
+    return NULL;
+  }
+
+  fseek(labels, 8, SEEK_SET);  // Skip header
+  float *batch_labels = (float *)malloc(sizeof(float) * n_images);
   uint8_t label;
-  for (int i = 0; i < data_size[0]; i++) {
-    e = fread(&label, 1, 1, train_labels);
+  for (int i = 0; i < n_images; i++) {
+    size_t e = fread(&label, 1, 1, labels);
     batch_labels[i] = (float)label;
+    if(e != 1) printf("label read error\n");
   }
-  fclose(train_labels);
-  int n_classes = 10;
+  fclose(labels);
+  return batch_labels;
+}
+
+int main() {
+  int n_images, image_size;
+  int scale = 6;
+
+  float *batch_data = read_mnist_images(DATA_DIR "train-images-idx3-ubyte", &n_images, &image_size, scale);
+  float *batch_labels = read_mnist_labels(DATA_DIR "train-labels-idx1-ubyte", n_images);
   
-  if(e!=1) printf("file error\n");
+  printf("Training data size (1/%d): %d\n", scale, n_images);
+  int n_classes = 10;
   
   Network net = create_network();
   add_layer(&net, create_dense(image_size, 128));
@@ -355,24 +378,39 @@ int main() {
 
   float lr = 0.1;
   int iters = 10;
+  float *loss_hist = (float *)malloc(sizeof(float) * iters);
   for (int i = 0; i < iters; i++) {
-    float *h = forward(&net, batch_data, data_size[0], image_size, i);
-    float loss = calc_loss(h, batch_labels, data_size[0], n_classes);
-    printf("iter=%d -- loss=%.6f\n", i, loss);
-    backward(&net, loss, batch_labels, data_size[0], i);
+    float *h = forward(&net, batch_data, n_images, image_size, i);
+    float loss = calc_loss(h, batch_labels, n_images, n_classes);
+    backward(&net, loss, batch_labels, n_images, i);
     update_parameters(&net, lr);
-  }
 
-  FILE *test_data = fopen(DATA_DIR "t10k-images-idx3-ubyte", "rb");
-  FILE *test_labels = fopen(DATA_DIR "t10K-labels-idx1-ubyte", "rb");
-  int test_size = 100;
-  float *h = forward(&net, batch_data, test_size, image_size);
-  float *preds = get_prediction(h, test_size, n_classes);
-  int error = 0;
-  for (int i = 0; i < test_size; i++) {
-    if (preds[i] != batch_labels[i])
-      error ++;
+    printf("iter=%d -- loss=%.6f\n", i, loss);
+    loss_hist[i] = loss;
   }
-  printf("accuracy: %.4f", 1.0f-(error/(float)test_size));
+  save_mat(loss_hist, "loss.bin", iters, 1);
+
+  
+  int test_n_images, test_image_size;
+  float *test_data = read_mnist_images(DATA_DIR "t10k-images-idx3-ubyte", &test_n_images, &test_image_size, 1);  // No scaling for test
+  float *test_labels = read_mnist_labels(DATA_DIR "t10k-labels-idx1-ubyte", test_n_images);
+  
+  float *h = forward(&net, test_data, test_n_images, image_size);
+  float *preds = get_prediction(h, test_n_images, n_classes);
+  
+  int error = 0;
+  for (int i = 0; i < test_n_images; i++) {
+    if (preds[i] != test_labels[i]) {
+      error++;
+    }
+  }
+  printf("Test accuracy: %.4f\n", 1.0f - (error/(float)test_n_images));
+
+  free(batch_data);
+  free(batch_labels);
+  free(test_data);
+  free(test_labels);
+  free(preds);
+  free(loss_hist);  
   return 0;
 }
