@@ -377,7 +377,7 @@ int main() {
   add_layer(&net, create_softmax(10));
 
   float lr = 0.1;
-  int iters = 10;
+  int iters = 50;
   float *loss_hist = (float *)malloc(sizeof(float) * iters);
   for (int i = 0; i < iters; i++) {
     float *h = forward(&net, batch_data, n_images, image_size, i);

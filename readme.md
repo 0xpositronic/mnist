@@ -4,6 +4,4 @@ current stage: C implementation
 
 todo:
   C memory management
-  test on test set
-  export and plot loss curve
-  take notes
+  CUDA CUDA CUDA CUDA FINALLY CUDA AAAAAAAAa
