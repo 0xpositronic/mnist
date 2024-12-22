@@ -1,3 +1,9 @@
 Mnist classifier in C/CUDA
 
-current stage: cleanup C version and move to CUDA implementation
+current stage: C implementation
+
+todo:
+  C memory management
+  test on test set
+  export and plot loss curve
+  take notes
