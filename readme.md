@@ -1,7 +1,14 @@
-Mnist classifier in C/CUDA
+Mnist classifier implementations in C and CUDA
 
-current stage: C implementation
+current stage: C implementation done
 
 todo:
-  C memory management
-  CUDA CUDA CUDA CUDA FINALLY CUDA AAAAAAAAa
+  CUDA CUDA CUDA
+
+
+How to run:
+- edit config.h to point at data directory
+- For C:
+    compile with "-lm"
+- For CUDA:
+    modify and use CmakeList.txt
